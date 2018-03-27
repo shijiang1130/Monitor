@@ -1,0 +1,1 @@
+/usr/local/bin/aws rds describe-db-instances --query "DBInstances[].[DBInstanceStatus,DBInstanceIdentifier]" --output text > /usr/lib/xymon/server/ext/rds.log >&1
