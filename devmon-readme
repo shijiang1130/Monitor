@@ -1,0 +1,201 @@
+ 
+devmon snmp hobbit setup howto 
+I could not find a definitive guide to setting up devmon with hobbit
+
+So I thought I would whip one out
+
+Assumptions:
+Hobbit is installed and working.
+Devmon in installed with no apparent problems.
+You are using a Linux machine as your hobbit server.
+You have a target device that has snmp enabled
+You know the ip address of the target device
+You know the read only community string of the target device..
+No firewall is installed on the Linux machine or between your Linux machine and the snmp target device.
+You have net-snmp-utils installed on the Linux machine.
+You have tcpdump installed on your Linux machine.
+NOTE: in my examples below the snmp target device will be called winserver
+
+1. Make sure you can ping the target snmp device from the linux server
+
+[root@hob tmp]# ping winserver
+PING winserver (192.168.100.105) 56(84) bytes of data.
+64 bytes from winserver (192.168.100.105): icmp_seq=0 ttl=124 time=48.7 ms
+
+This tells us that the device is up and is reachable across the network
+
+If you cant ping the snmp device, you must troubleshoot this problem before going any further. Remember sometimes devices are configured to not respond to a ping.
+
+2. Try to read the sysDescr from the snmp device, this will tell us that we can reach the snmp device via snmp, we are using the correct read only community string and we will use the returned information in future steps
+
+This example shows my target device is using v2c snmp and the community id is public.
+
+ [root@hob tmp]# snmpget -v2c -c public winserver 1.3.6.1.2.1.1.1.0
+SNMPv2-MIB::sysDescr.0 = STRING: Hardware: x86 Family 15 Model 3 Stepping 4 AT/AT COMPATIBLE - Software: Windows 2000 Version 5.0 (Build 2195 Multiprocessor Free)
+If you were successful, Hooray ! this is a good thing, 
+
+We can talk snmp to the device
+We are using the correct community string
+We are using the correct snmp version
+We now know the sysDescr for the device, devmon setup will need to know this
+If you weren't successful you must trouble shoot this step before going any further, I would suggest using snmpget with the -d ( debug) option to gather more information and maybe use tcpdump to listen for any communication between the linux server and the snmp target device
+
+3. Add the target device to your hobbit setup, by adding a line to your bb-hosts file, see the devmon documentation for more information on the options you can add here.
+
+192.168.100.105 winserver # DEVMON:cid(public)
+4. Familiarize yourself with the basic operation of devmon
+
+ ( I copied this from a answer to a question on the devmon support mailing list on sourceforge, it was written by eschwim the project admin)
+
+The way Devmon works is fairly simple. Here's the gist of it:
+A. An outside process (most likely devmon running with the
+--readbbhosts flag) updates the Devmon database from the
+Hobbit or BigBrother bb-hosts file.
+In a single-node installation, the Devmon database is stored
+in the 'hosts.db' file. In a multi-node installation, it
+is kept in a MySQL database.
+B2. Devmon reads in its templates. A single-node installation
+reads the templates from disk at the beginning of every
+polling cycle. The multi-node version reads the templates
+from the database, but only if they have been updated/changed
+since the last time it read them.
+C. Devmon does SNMP queries on all of the devices in its database.
+SNMP queries are optimized so that if the same SNMP OID is
+specified in multiple tests for a device, it is only queried
+once.
+D. Devmon applies template logic against the returned SNMP data.
+The involves doing transforms, applying thresholds, and then
+finally rendering the message to be sent to the display server.
+E. Devmon sends the rendered messages to the Display server.
+F. Devmon sleeps for any remaining time in the poll cycle.
+G. Return to step A (although the interval at which your
+external process updates your devmon database might not
+be the same as your poll interval, so Devmon might actually
+go to step B at this point).
+ 
+
+ 5. At this point we know we have a basic understanding of devmon, we can talk to our target device via snmp, we know the sysDescr and we have the device entered into our bb-hosts file. Since my device, a windows2000 server is not one of the supplied templates, the next step is to create a new template using a preexisting one as a guide.
+
+In the templates directory, make a new directory for the new device.
+Copy a specs file from another device directory to use as a guide.
+Edit the specs file, Change the Vendor to a vendor name you want to use, change the model to the model number you want to use, change the snmpver to the snmpver of the device ( you confirmed what version in step 2 above) , and most importantly change the sysdesc to match the sysDescr you received from the device in step 2 above.
+[root@hob win2000server]# more specs
+vendor : Microsoft
+model : Win2000
+snmpver : 2
+sysdesc : Hardware: x86 Family 15 Model 3 Stepping 4 AT/AT COMPATIBLE - Software
+: Windows 2000 Version 5.0
+At this point don't worry about a test directory like all the other devices have, we are still just trying to make sure devmon is going to work with hobbit
+6. The next step is to run devmon with the --readbbhosts flag and -vvv  When we do this the devmon process will read the bb-hosts file looking for the DEVMON tag, when it finds one, it will poll the device for sysDescr and try to find a matching device in the templates directory, if a match is found the device is added to the devmon hosts.db if it doesn't find a match, it will basically do nothing.
+
+[root@hob devmon]# ./devmon --readbbhosts -vvv
+[07-01-31@04:42:07] SNMP querying all hosts in bb-hosts file, please wait...
+[07-01-31@04:42:07] Querying pre-existing hosts
+[07-01-31@04:42:08] Querying new hosts /w custom cids using snmp v2
+[07-01-31@04:42:08] Discovered winserver as a Microsoft Win2000
+If the discovery was successful this means that devmon polled the systems listed in the bb-hosts file with the DEVMON tag for its sysDescr value, it then worked its way through the template directory peeking at all the specs files and trying to find a match for the sysDescr retrieved from the target device, if it finds a match the device is entered into the hosts.db file. 
+
+If the discovery was unsuccessful, you need to double check your sysDescr entry in the specs file.
+
+7. We now know devmon has successfully identified the target device and has entered it into the hosts.db. Our next step is to add a test. You should pick a value from the MIB for the device that you want hobbit to check. On my test device I have loaded the free standard edition snmp package from http://www.snmp-informant.com/. This package allows me to check the free disk space on the machine using this oid ( object identifier)  .1.3.6.1.4.1.9600.1.1.1.1.5.2.67.58 . So my test will be a check of free disk space. Lets test with snmpget first to confirm that this is a good oid:
+
+[root@hob win2000server]# snmpget -v2c -c public winserver .1.3.6.1.4.1.9600.1.1.1.1.5.2.67.58
+SNMPv2-SMI::enterprises.9600.1.1.1.1.5.2.67.58 = Gauge32: 71
+
+As you can see a value was successfully retrieved, so this is going to be the basis of the test.
+
+8. Now is the time we concern ourselves with the other files we skipped in the new directory we created in step 5. There are 5 files that are used, the only ones required are oids, message, thresholds the others are useful and you will probably end up using them, but our goal is just to get going. 
+
+Required files:
+
+oid : this file contains the OID of the test you want to perform, notice I just made up a name in the first field, this name will be used in the other files also, so you want to make it unique. The documentation that comes with devmon is very good for these files, so I wont be going into great detail.
+
+[root@hob disk]# more oids
+win2000model :                 .1.3.6.1.2.1.1.1.0                                :leaf
+win2000uptime :                .1.3.6.1.2.1.1.3.0                                :leaf
+win2000freespace :           .1.3.6.1.4.1.9600.1.1.1.1.5.2.67.58    :leaf
+message: this is the file that is used to construct the message that will go to the hobbit server, it uses the names you made up in the oid file.  The win2000uptime_m is a variable created in the transform file.  Again the documentation is fine for this file
+
+[root@hob disk]# more message
+{win2000model.errors}
+{win2000uptime.errors}
+{win2000freespace.errors}
+
+Disk Free Space
+
+Model {win2000model}
+System up time {win2000uptime_m} minutes
+Free Space {win2000freespace}%
+
+ 
+
+thresholds: this files sets your desired thresholds for the value you are watching, this is very self explanatory. See the documentation.
+
+[root@hob disk]# more thresholds
+win2000freespace :     red                  : <=10 : free space is very low
+win2000freespace :     yellow             : <=20: free space is low
+Optional Files:
+
+transforms: this file gives you the ability to do some magic with the values retrieved from the snmp target, I simply used it to divide the uptime to get minutes, but it seems very powerful. See the documentation
+
+[root@hob disk]# more transforms
+win2000uptime_s :        MATH     : {win2000uptime} / 100
+win2000uptime_m :       MATH     : {win2000uptime} / 100 / 60
+win2000uptime_h :       MATH      :  {win2000uptime} / 100 / 60 / 60
+ 
+
+9. The final test ! Run devmon with the -f  -p and -vvvvvvvvv options , this will keep devmon in the foreground, not send the message to the hobbit server and be very verbose:
+
+[root@hob disk]# ../../../devmon -f -p -vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+[07-01-31@06:45:29] Nodename autodetected as hob
+[07-01-31@06:45:29] ---Initilizing devmon...
+[07-01-31@06:45:29] Verbosity level: 30
+[07-01-31@06:45:29] Logging to /var/log/devmon.log
+[07-01-31@06:45:29] Node 0 reporting to localhost
+[07-01-31@06:45:29] Running under process id: 29301
+[07-01-31@06:45:29] Entering poll loop
+[07-01-31@06:45:30] Starting snmp queries
+[07-01-31@06:45:30] Querying winserver for tests disk
+[07-01-31@06:45:31] Performing test logic
+[07-01-31@06:45:31] Done with test logic
+[07-01-31@06:45:31] Sending messages to display server
+status winserver.disk green Wed Jan 31 06:45:31 2007
+
+
+Disk Free Space
+
+Model Hardware: x86 Family 15 Model 3 Stepping 4 AT/AT COMPATIBLE - Software: Windows 2000 Version 5.0 (Build 2195 Multiprocessor Free)
+System up time 1293.99 minutes
+Free Space 71%
+
+
+Devmon version 0.2.2 running on hob
+status hob.dm green Wed Jan 31 06:45:31 2007
+
+devmon, version 0.2.2
+
+Node name: hob
+Node number: 0
+Process ID: 29301
+
+Cycle time: 60
+Dead time: 180
+
+Polled devices: 1
+Polled tests: 1
+Avg tests/node: n/a
+# clear msgs: 0
+
+SNMP test time: 1
+Test logic time: 0
+BB msg xfer time: 0
+This poll period: 1
+
+Avg poll time: wait
+
+[07-01-31@06:45:31] Sleeping for 59 seconds.
+
+10.  Success, devmon is working, the snmp device is responding, now just follow the documentation to setup devmon in cron.
+
+
+ 
