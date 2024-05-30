@@ -1,0 +1,83 @@
+1. 更新系统
+首先，打开终端并更新您的系统以确保所有包都是最新的：
+sudo dnf update -y
+2. 设置 Docker 仓库
+添加 Docker 的官方仓库，以便于安装 Docker CE：
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+3. 安装 Docker CE
+接下来，安装 Docker CE 及其依赖项：
+sudo dnf install -y docker-ce docker-ce-cli containerd.io
+ 
+4. 启动 Docker 并设置开机自启
+安装完成后，启动 Docker 服务并设置开机自启：
+[root@promethus ~]# cat > /etc/docker/daemon.json << EOF
+> {
+  "registry-mirrors": ["https://docker.mirrors.ustc.edu.cn","https://mirror.iscas.ac.cn"],
+  "insecure-registries":["docker.rockylinux.cn"],
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+     "max-size": "100m",
+     "max-file": "10"
+  },
+  "storage-driver": "overlay2",
+  "live-restore": true,
+  "default-shm-size": "128M",
+  "max-concurrent-downloads": 10,
+  "max-concurrent-uploads": 10,
+  "debug": false
+}
+> EOF
+
+# 重启Docker
+[root@localhost ~]# systemctl daemon-reload
+ 
+# 设置开机自启动，同时启动 docker 服务
+[root@localhost ~]# systemctl enable docker --now
+ 
+# 查看 docker 服务状态
+[root@localhost ~]# systemctl status docker
+● docker.service - Docker Application Container Engine
+     Loaded: loaded (/usr/lib/systemd/system/docker.service; enabled; preset: disabled)
+     Active: active (running) since Fri 2024-03-08 11:06:10 CST; 40min ago
+TriggeredBy: ● docker.socket
+       Docs: https://docs.docker.com
+   Main PID: 8834 (dockerd)
+      Tasks: 10
+     Memory: 36.2M
+        CPU: 1.546s
+     CGroup: /system.slice/docker.service
+             └─8834 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+ 
+5. 验证安装
+通过运行以下命令来验证 Docker 是否正确安装并运行：
+
+sudo docker run hello-world
+
+6. 安装Prometheus
+[root@Docker ~]# docker pull prom/prometheus
+[root@Docker ~]# docker run -itd --name=prometheus01 --restart=always -p 9090:9090 prom/prometheus
+7. 安装Grafana
+docker run -d -i -p 3000:3000 \
+--name grafana01 \
+-v "/etc/localtime:/etc/localtime" \
+-e "GF_SECURITY_ADMIN_PASSWORD=123456" \
+grafana/grafana
+ 
+8. 安装Node-exportor
+[root@Docker ~]# docker pull prom/node-exporter
+[root@Docker ~]# docker run -itd --name=node-exporter \
+--restart=always \
+-p 9100:9100 \
+-v "/proc:/host/proc:ro" \
+-v "/sys:/host/sys:ro" \
+-v "/:/rootfs:ro" \
+prom/node-exporter
+
+9. 客户端
+https://github.com/prometheus-community/windows_exporter/releases/tag/v0.26.0-rc.2
+
+10 导入dashboard
+ 
+
+ 
